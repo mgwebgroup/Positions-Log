@@ -11,6 +11,7 @@ regex=(
    	[exchange_exec_id]="[\.:#A-Z0-9_\-]{7,}"
    	[order_id]="[A-Z0-9]{8}.[A-Z0-9]{8}.[A-Z0-9]{8}.[A-Z0-9]{4}"
    	[account_no]="[A-Za-z0-9]{4,}"
+   	[exchange_name]="[A-Za-z0-9]{3,}"
 )
 
 validate_timestamp () {
@@ -21,8 +22,7 @@ validate_timestamp () {
 
 validate_instrument () {
 	# Covers typical NYSE/Nasdaq symbols and common dot/dash extensions such as class or warrant markers while rejecting digits and spaces
-	local s=${INSTRUMENT^^}
-	[[ $s =~ ^${regex[instrument]}$ ]] && return 0 || return 1
+	[[ $INSTRUMENT =~ ^${regex[instrument]}$ ]] && return 0 || return 1
 }
 
 validate_quantity () {
@@ -36,28 +36,22 @@ validate_price () {
 }
 
 validate_currency () {
-	local s=${CURRENCY^^}
-	[[ $s =~ ^${regex[currency]}$  ]] && return 0 || return 1
+	[[ $CURRENCY =~ ^${regex[currency]}$  ]] && return 0 || return 1
 }
 
 validate_commission () {
+	[[ -z $COMMISSION ]] && return 0
 	[[ $COMMISSION =~ ^${regex[price]}$ ]] && return 0 || return 1
 }
 
 validate_exchange_exec_id () {
-	if [ $EXCHANGE_EXEC_ID ] ; then 
-		local s=${EXCHANGE_EXEC_ID^^}
-		[[ $s =~ ^${regex[exchange_exec_id]}$ ]] && return 0 || return 1
-	fi
-	return 0
+	[[ -z $EXCHANGE_EXEC_ID ]] && return 1 
+	[[ $EXCHANGE_EXEC_ID =~ ^${regex[exchange_exec_id]}$ ]] && return 0 || return 1
 }
 
 validate_order_id () {
-	if [ $ORDER_ID ] ; then
-		local s=${ORDER_ID^^}
-		[[ $s =~ ^${regex[order_id]}$ ]] && return 0 || return 1
-	fi
-	return 0
+	[[ -z $ORDER_ID ]] && return 0
+	[[ $ORDER_ID =~ ^${regex[order_id]}$ ]] && return 0 || return 1
 }
 
 validate_sl () {
@@ -79,9 +73,12 @@ validate_pt () {
 }
 
 validate_account_no () {
-	if [ $ACCOUNT_NO ] ; then 
-		[[ $ACCOUNT_NO =~ ^${regex[account_no]}$ ]] && return 0 || return 1
-	fi
-	return 0
+	[[ -z $ACCOUNT_NO ]] && return 0 
+	[[ $ACCOUNT_NO =~ ^${regex[account_no]}$ ]] && return 0 || return 1
+}
+
+validate_exchange_name () {
+	[[ -z $EXCHANGE_NAME ]] && return 0 
+	[[ $EXCHANGE_NAME =~ ^${regex[exchange_name]}$ ]] && return 0 || return 1
 }
 

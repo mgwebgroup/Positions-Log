@@ -47,7 +47,5 @@ ACCOUNT_NO=ABCD1
 
 Make sure default values pass validation regexes located in lib/bash/validation.sh
 
-To add extra fields assign them as a list:
-EXTRA_FIELDS=field1,field2
 
 
