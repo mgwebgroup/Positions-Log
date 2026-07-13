@@ -2,36 +2,45 @@
 
 ## Files
 
-The script uses two csv files. Position entries are stored in journal entries file assigned to the $JOURNAL variable. Meta data entries for each position are stored in a data cache file assigned to $DATA_CACHE variable.
+The script uses two csv files: journal entries and meta data. Position entries file  assigned to the $JOURNAL variable. Position meta entries are stored in a e file assigned to $META_FILE variable.
 
 Journal entries example:
 
 ```
 # file Data/Positions/Journal_2026.csv:
-TIMESTAMP,INSTRUMENT,QUANTITY,PRICE,CURRENCY,COMMISSION,EXCHANGE_EXEC_ID,ORDER_ID,REAL_P&L
+TIMESTAMP,INSTRUMENT,QUANTITY,PRICE,CURRENCY,COMMISSION,EXCHANGE_EXEC_ID,ORDER_ID,ACCOUNT_NO,EXCHANGE_NAME,CUSIP
 1767369650,PANW,-10,178.99,USD,0.354207,376654950S,0036BA34.00031198.6957591D.0001,
 1767623401,COIN,-6,247.50,USD,0.352627,0308193782,0036BA34.00031198.695B4ABA.0001,
 ...
 ```
 
-Data cache example:
+Meta file example:
 ```
-# file Data/Cache/cache.csv
-GOOG:DDRU,Q:3,DD:341.22,RU:370.89
-GOOG:META,Q:3,SL:340,PT:380
-MSFT:DDRU,Q:10,DD:371.236,RU:394.082
-MSFT:META,Q:10,SL:365.186,PT:412
+# file Data/Positions/meta.csv
+PANW:1767369650,DD:180,RU:170,SL:200,PT:150,Q:-10
+```
 
-```
+While fields of the journal file are self-explanatory, fields of the meta file mean the following:
+TICKER:TIMESTAMP    - unique key identifying ticker and position entry
+DD                  - Max drawdown for a position
+RU                  - Max runup for a position
+SL                  - Stop loss
+PT                  - Price target
+Q                   - Quantity, with negative values indicating short positions
+
+
+
 
 ## Idempotency
 
-Journal entires shall not have rows with same EXCHANGE_EXEC_ID. If a row is entered with already existing EXCHANGE_EXEC_ID, it'll override existing row.
+Journal entries shall not have rows with same EXCHANGE_EXEC_ID. If a row is entered with already existing EXCHANGE_EXEC_ID, it'll override existing row.
+
+Meta file entries shall not have rows with same TICKER:TIMESTAMP labels.
 
 
 # Configuration
 
-Open up env.sh file and enter paths for the journal and data cache files.
+Open up env.sh file and enter paths for the journal and meta files.
 
 Set default values for timezone, comission, currency, order_id, account number. 
 
@@ -46,6 +55,4 @@ ORDER_ID='0036ba34'
 ACCOUNT_NO=ABCD1
 
 Make sure default values pass validation regexes located in lib/bash/validation.sh
-
-
 

@@ -98,8 +98,7 @@ if [[ ! -f "$JOURNAL" ]] ;then
 fi
 
 while : ; do
-	# input_fields
-	source test.sh
+	input_fields
 
 	# delete rows with same EXCHANGE_EXEC_ID if found
 	sed -iE "/,${EXCHANGE_EXEC_ID},/d" "${JOURNAL}"
@@ -112,6 +111,11 @@ while : ; do
 
 	# Remove blank lines
 	sed -i -e '/^$/d' "${JOURNAL}"
+
+	read -e -p "Enter meta information? [y]es/no:" REPLY 
+	if [[ $REPLY =~ ^([Yy]|[Yy][Ee][Ss])$ ]] ; then
+		( source meta.sh )
+	fi
 
 	read -e -p "Enter one more record? [y]es/no: " REPLY && [[ $REPLY =~ ^([Yy]|[Yy][Ee][Ss])$ ]] || break
 done
