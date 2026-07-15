@@ -101,7 +101,7 @@ while : ; do
 	input_fields
 
 	# delete rows with same EXCHANGE_EXEC_ID if found
-	sed -iE "/,${EXCHANGE_EXEC_ID},/d" "${JOURNAL}"
+	sed -i -E "/,${EXCHANGE_EXEC_ID},/d" "${JOURNAL}"
 
 	# add_record
 	printf "${TIMESTAMP},${INSTRUMENT},%i,%0.2f,${CURRENCY},%0f,${EXCHANGE_EXEC_ID},${ORDER_ID},${ACCOUNT_NO},${EXCHANGE_NAME},${CUSIP}\n" ${QUANTITY} ${PRICE} ${COMMISSION} >> "${JOURNAL}"

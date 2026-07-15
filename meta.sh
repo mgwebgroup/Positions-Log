@@ -35,7 +35,7 @@ while : ; do
 done
 
 # delete rows with same <INSTRUMENT>:<TIMESTAMP> if found
-sed -iE "/^${INSTRUMENT}:${TIMESTAMP},/d" "${META_FILE}"
+sed -i -E "/^${INSTRUMENT}:${TIMESTAMP},/d" "${META_FILE}"
 
 # add_record
 printf "${INSTRUMENT}:${TIMESTAMP},SL:%0.2f,HIGH:%0.2f,LOW:%0.2f,PT:%0.2f,Q:%i\n" ${SL} ${INTRAHIGH} ${INTRALOW} ${PT} ${QUANTITY} >> "${META_FILE}"
