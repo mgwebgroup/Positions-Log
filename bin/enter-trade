@@ -2,8 +2,10 @@
 
 set -euo pipefail
 
-source env.sh
-source lib/bash/validation.sh
+SCRIPT_DIR=$(realpath "$(dirname ${BASH_SOURCE[0]})")
+ROOT_DIR=${SCRIPT_DIR%%/bin}
+source "${ROOT_DIR}/env.sh"
+source "${LIB_DIR}/bash/validation.sh"
 
 order_date="$(date +%Y-%m-%dT09:30:00${TIMEZONE})"  # default prompt for order date
 header_fields="TIMESTAMP,INSTRUMENT,QUANTITY,PRICE,CURRENCY,COMMISSION,EXCHANGE_EXEC_ID,ORDER_ID,ACCOUNT_NO,EXCHANGE_NAME,CUSIP"
@@ -101,7 +103,7 @@ while : ; do
 	input_fields
 
 	# delete rows with same EXCHANGE_EXEC_ID if found
-	sed -i -E "/,${EXCHANGE_EXEC_ID},/d" "${JOURNAL}"
+	sed -i -e "/,${EXCHANGE_EXEC_ID},/d" "${JOURNAL}"
 
 	# add_record
 	printf "${TIMESTAMP},${INSTRUMENT},%i,%0.2f,${CURRENCY},%0f,${EXCHANGE_EXEC_ID},${ORDER_ID},${ACCOUNT_NO},${EXCHANGE_NAME},${CUSIP}\n" ${QUANTITY} ${PRICE} ${COMMISSION} >> "${JOURNAL}"
@@ -114,7 +116,7 @@ while : ; do
 
 	read -e -p "Enter meta information? [y]es/no:" REPLY 
 	if [[ $REPLY =~ ^([Yy]|[Yy][Ee][Ss])$ ]] ; then
-		( source meta.sh )
+		( source "${ROOT_DIR}/bin/enter-meta" )
 	fi
 
 	read -e -p "Enter one more record? [y]es/no: " REPLY && [[ $REPLY =~ ^([Yy]|[Yy][Ee][Ss])$ ]] || break
