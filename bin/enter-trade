@@ -3,8 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(realpath "$(dirname ${BASH_SOURCE[0]})")
-ROOT_DIR=${SCRIPT_DIR%%/bin}
-source "${ROOT_DIR}/env.sh"
+source "${SCRIPT_DIR%%/bin}/env.sh"
 source "${LIB_DIR}/bash/validation.sh"
 
 order_date="$(date +%Y-%m-%dT09:30:00${TIMEZONE})"  # default prompt for order date

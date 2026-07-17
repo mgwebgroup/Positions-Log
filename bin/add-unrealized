@@ -1,14 +1,14 @@
 #! /usr/bin/awk -f 
-# This program reads consolidated positions produced by "realized_pl.awk" script
-# and computes unrealized P&L per symbol using OHLCV data files saved in
-# directory of your choice. It also adds columns with closing price and unrealized
-# P&L.
+#
+# This program reads consolidated positions produced by `realized_pl` script
+# and computes unrealized P&L per symbol using OHLCV data files stored in
+# directory of your choice.
 #  
 # Usage:
-# ./unrealized_pl.awk \
+# ./bin/add-unrealized \
 #   -v date=YYYY-MM-DD \
 #   -v ohlcv_dir=OHLCV/Data/Dir \
-#   Path/to/consolidated/positions/file
+#   Path/to/file/produced/by/realized-pl
 #
 # Where:
 #   date - Date for which to output unrealized P&L in YYYY-MM-DD format. 
@@ -38,7 +38,7 @@ BEGIN {
 }
 
 NR == 1 {
-	print $0, "CLOSING_P", "UNR_P&L"
+	print $0, "UNR_P&L"
 	split(date, parts, "-")
 	}
 
@@ -67,6 +67,6 @@ NR > 1 {
 			unr_pnl = (closing_p - base_p) * q
 	}
 
-	printf "%s,%0.2f,%0.2f\n", record, closing_p, unr_pnl
+	printf "%s,%0.2f\n", record, unr_pnl
 }
 

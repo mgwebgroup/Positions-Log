@@ -1,0 +1,47 @@
+#! /usr/bin/awk -f 
+#
+# This program uses output of `bin/compute-unrealized` and outputs final account balance.
+# 
+# Usage:
+# ./bin/get-balance
+#     -v balance=100000 \
+#     -v ts="$(date -d 2020-01-02T16:00:00-04:00 '+%s') \
+#   Path/to/file/produced/by/unrealized-pl
+#   echo
+
+BEGIN {
+    FS = ","
+    OFS = ","
+    if (balance == "") {
+        balance = 0
+    }
+    balance = balance + 0
+	max_ts = ts + 0
+}
+
+NR == 1 {
+    # input header from consolidate_trades.awk; skip data processing
+    next
+}
+
+NR > 1 {
+    ts          = $1 + 0
+    instrument  = $2
+    qty         = $3 + 0
+    avg_base    = $4 + 0
+    curr        = $5
+    comm        = $6 + 0
+    real_pnl    = $7 + 0
+    unr_pnl     = $8 + 0
+
+    # Adjust balance: realized P&L minus commission
+    balance += real_pnl + unr_pnl - comm
+
+    if (ts > max_ts) 
+        max_ts = ts
+}
+
+END {
+    printf "%s,%.2f\n", strftime("%Y-%m-%d", max_ts), balance 
+}
+

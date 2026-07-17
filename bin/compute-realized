@@ -1,4 +1,5 @@
 #! /usr/bin/awk -f 
+#
 # This program reads trading journal entries from data file argument and creates summary output per symbol.
 # Supported output format for now is csv. Columns output are:
 # TIMESTAMP,INSTRUMENT,QUANTITY,AVG_BASE_PRICE,CURRENCY,COMMISSION,REAL_P&L
@@ -8,11 +9,19 @@
 # 
 # Usage:
 # To list Realized P&L from January 1 2020 to present day:
-# ./realized_pl.awk start_ts=$(date -d 2020-01-01T09:30-05:00 +%s) end_ts=$(date +%s) Data/Positions/Journal_2025.csv 
-#   start_ts - start Unix timestamp to process journal entries from (inclusive). Specify NYC timezone if using "date -d ..."
-#   end_ts  - end Unix timestamp to process journal entries to (inclusive). Specify NYC timezone if using "date -d ..." 
+# ./bin/compute-realized start_ts=$(date -d 2020-01-01T09:30-05:00 +%s) end_ts=$(date +%s) "$JOURNAL"
+#
+# Where:
+#   start_ts - Unix timestamp to process journal entries from (inclusive).
+#   end_ts  - Unix timestamp to process journal entries to (inclusive).
 #   last argument is path to file of journal entries (trades). It must have header.
 #
+# Output:
+# TIMESTAMP,INSTRUMENT,QUANTITY,AVG_BASE_PRICE,CURRENCY,COMMISSION,REAL_P&L
+# 1769014792,HALO,0,71.67,USD,1.46,31.30
+# 1781805281,COIN,0,163.60,USD,1.45,-17.40
+# ...
+# 
 # To reset quantity for a symbol, include string with appropriate timestamp, symbol name, 0 quantity, and empty fields for everything else, like so:
 # 1763728636,ORCL,0,,,,,,,
 #

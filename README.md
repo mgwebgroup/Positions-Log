@@ -9,8 +9,9 @@ The package is organized around two ideas:
 
 The analytics layer is implemented in AWK:
 
-- `bin/compute-realized_pl` consolidates journal entries into per-symbol position state and realized P&L
-- `bin/compute-unrealized_pl` enriches those consolidated positions with closing prices from OHLCV files and computes unrealized P&L.
+- `bin/compute-realized` consolidates journal entries into per-symbol position state and realized P&L
+- `bin/add-unrealized` enriches those consolidated positions with closing prices from OHLCV files and computes unrealized P&L.
+- `bin/get-balance` Computes a tuple of _YYYY-MM-DD,Balance_ output to stdout. Uses output of add-unrealized
 
 
 ## Package layout
@@ -20,13 +21,14 @@ The analytics layer is implemented in AWK:
 │   ├── enter-trade
 │   ├── enter-meta
 │   ├── compute-realized
-│   ├── compute-unrealized
-│   ├── env.sh
-│   └── env.sh.example
+│   ├── add-unrealized
+│   └── get-balance 
 ├── lib
 │   └── bash
 │      └── validation.sh
 ├── LICENSE
+├── env.sh
+├── env.sh.example
 └── README.md
 ```
 
@@ -73,6 +75,8 @@ Field meanings:
 - `PT`: price target.
 - `Q`: quantity; negative values represent short positions, matching the journal convention.
 
+Meta data file is used for figuring dialy drawdowns and runups for all positions.
+
 
 
 ## Configuration
@@ -86,7 +90,7 @@ JOURNAL=/absolute/path/to/Data/Positions/Journal_2026.csv
 META_FILE=/absolute/path/to/Data/Positions/meta.csv
 OHLCV_DIR=/absolute/path/to/OHLCV/dir"
 
-TIMEZONE='-04:00'
+TIMEZONE='-04:00' # default timezone to be used for times of order entry
 COMMISSION='0.35'
 CURRENCY=USD
 ORDER_ID='abcdef01.02030405.abddef' # first digits usually are repeatable
@@ -139,7 +143,7 @@ After the execution is written, `enter-trade` asks whether to enter metadata. If
 - `Intraday Low`.
 - `Price Target`.
 
-As opposed to `enter-trade` rule on idempotency, `enter-meta` allows for multiple entries with same `<INSTRUMENT>:<TIMESTAMP>` keys. This is because brokers may split an order and route it to several exchanges. In this way, execution time may be same, yet `EXCHANGE_EXEC_ID` will be always unique.
+As opposed to `enter-trade` rule on idempotency, `enter-meta` allows for multiple entries with same `<INSTRUMENT>:<TIMESTAMP>` keys. This is because brokers may split an order and route it to several exchanges. In this way, execution time may be same, yet `EXCHANGE_EXEC_ID` will be unique.
 
 
 ### 3. Enter another trade
@@ -162,7 +166,7 @@ The script is intended to be run with a start and end Unix timestamp and a journ
 ./bin/compute-realized \
   start_ts=$(date -d '2026-01-01T09:30-05:00' +%s) \
   end_ts=$(date +%s) \
-  /absolute/path/to/Data/Positions/Journal_2026.csv
+  "${JOURNAL}"
 ```
 
 What it does:
@@ -181,25 +185,17 @@ Example reset row:
 1763728636,ORCL,0,,,,,,,
 ```
 
-Example: save realized P&L output to a file for later use:
-
-```bash
-./bin/compute-realized \
-  start_ts=$(date -d '2026-01-01T09:30-05:00' +%s) \
-  end_ts=$(date +%s) \
-  "$JOURNAL" > /tmp/realized_positions.csv
-```
 
 ## Unrealized P&L
 
-`bin/compute-unrealized` takes the consolidated output of `compute-realized`, looks up a closing price for each symbol from per-ticker OHLCV files, and appends unrealized P&L and Price columns.
+`bin/add-unrealized` takes the consolidated output of `compute-realized`, looks up a closing price for each symbol from per-ticker OHLCV files, and appends unrealized P&L column.
 
 Expected invocation:
 
 ```bash
-./bin/compute-unrealized \
-  -v date=YYYY-MM-DD \
-  -v ohlcv_dir=/absolute/path/to/OHLCV \
+./bin/add-unrealized \
+  date=YYYY-MM-DD \
+  ohlcv_dir=${OHLCV_DIR} \
   /path/to/consolidated_positions.csv
 ```
 
@@ -222,21 +218,21 @@ Example OHLCV row:
 2026-07-13,210.00,214.20,208.50,213.75,51234000
 ```
 
-The script appends two columns to the realized P&L output:
 
-- `CLOSING_P`
-- `UNR_P&L`
+## Computing Account Balance
 
-Example invocation:
+'bin/get-balance' takes output of `add-unrealized` and using the date supplied via ts argument outputs a tuple _YYYY-MM-DD,Balance_
+
+Expected invocation:
 
 ```bash
-./bin/compute-unrealized \
-  -v date=2026-07-13 \
-  -v ohlcv_dir="$(realpath /absolute/path/to/Data/OHLCV)" \
-  /tmp/realized_positions.csv > /tmp/unrealized_positions.csv
+./bin/get-balance \
+  ts=$(date -d 2020-01-02T17:30-04:00 +%s) \
+  balance=10000
+  Path/to/output/of/add-unrealized
+
 ```
 
-The `date` value may also be supplied through the `DATE` environment variable; a command-line `-v date=...` value takes precedence.
 
 
 ## End-to-end example
@@ -244,20 +240,29 @@ The `date` value may also be supplied through the `DATE` environment variable; a
 A typical workflow looks like this:
 
 ```bash
-# 1. Enter one or more trades interactively
+# 1. Source the env.sh file to be able to callout needed directories by variable names
+source env.sh
+
+# 2. Enter one or more trades interactively
 ./bin/enter-trade
 
-# 2. Compute realized P&L over a date range
+# 3. Compute realized P&L over a date range
 ./bin/compute-realized \
   start_ts=$(date -d '2026-01-01T09:30-05:00' +%s) \
   end_ts=$(date +%s) \
   "$JOURNAL" > /tmp/realized_positions.csv
 
-# 3. Compute unrealized P&L for a closing date using OHLCV files
-./bin/compute-unrealized \
-  -v date=2026-07-13 \
-  -v data_dir="/absolute/path/to/OHLCV" \
+# 4. Compute unrealized P&L for a closing date using OHLCV files
+./bin/add-unrealized \
+  date=2026-07-13 \
+  ohlcv_dir="${OLCV_DIR}" \
   /tmp/realized_positions.csv > /tmp/unrealized_positions.csv
+
+# 5. Compute Account Balance
+./bin/get-balance \
+  ts=$(date +%s)
+  balance=10000 \
+  /tmp/unrealized_positions.csv
 ```
 
 
@@ -271,8 +276,7 @@ A typical workflow looks like this:
 
 ## Assumptions and caveats
 
-- The README reflects the current attached implementation, including the existing metadata key format used by `enter-meta`.
 - `bin/compute-realized` expects a headered journal CSV and processes rows by symbol over a timestamp interval.
-- `bin/compute-unrealized` expects one OHLCV file per symbol per year and does a direct date match on the first field.
+- `bin/add-unrealized` expects one OHLCV file per symbol per year and does a direct date match on the first field.
 - If an OHLCV file is missing or the date is absent, the script will not be able to produce a valid closing-price-based unrealized P&L for that symbol. It will have a '0' value instead.
 
