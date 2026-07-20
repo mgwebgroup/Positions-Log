@@ -1,0 +1,337 @@
+#! /usr/bin/gawk -f
+
+# End-of-day DD/RU updater.
+#
+# Reads consolidated positions from stdin or a CSV file with header, uses:
+#   1) meta.csv records keyed as TICKER:<TIMESTAMP> and TICKER:META
+#   2) OHLCV files keyed by YYYY-MM-DD
+#
+# It outputs the input rows plus:
+#   DD,RU,LOW,HIGH,DD++,RU++
+#
+# Meta row formats:
+#   TICKER:TIMESTAMP,SL:...,HIGH:...,LOW:...,PT:...,Q:...
+#   TICKER:META,DD:...,RU:...,Q:...
+#
+# Rules:
+# - Same-day add/open fills contribute to intraday consolidation.
+# - Same-day reducing fills do NOT contribute to intraday DD/RU consolidation.
+# - Same-day reducing fills DO adjust remaining quantity in TICKER:META.
+# - date=YYYY-MM-DD is mandatory and used to read OHLCV rows.
+# - ohlcv_dir points to directory holding TICKER_Daily_YYYY.csv files.
+# - TZ environment should be set to the desired trading-session timezone.
+#
+# Example:
+#   TZ=America/New_York ./add_ddru.awk \
+#     -v date=2026-07-17 \
+#     -v meta_file=Data/meta.csv \
+#     -v ohlcv_dir=Data/OHLCV \
+#     -v update=1 \
+#     consolidated_positions.csv
+
+@include "data_cache.awk"
+
+BEGIN {
+    FS = ","
+    OFS = ","
+
+    if (date == "" && ("DATE" in ENVIRON))
+        date = ENVIRON["DATE"]
+
+    if (date == "") {
+        print "ERROR: date=YYYY-MM-DD is required" > "/dev/stderr"
+        exit 2
+    }
+
+    if (meta_file == "")
+        meta_file = "Data/meta.csv"
+    if (ohlcv_dir == "")
+        ohlcv_dir = "Data/OHLCV"
+
+    split(date, date_parts, "-")
+    year = date_parts[1]
+
+    load_meta(meta_file)
+}
+
+function fill_date(ts,    d) {
+    d = strftime("%Y-%m-%d", ts)
+    return d
+}
+
+function kv_value(field, key,    prefix) {
+    prefix = key ":"
+    if (index(field, prefix) == 1)
+        return substr(field, length(prefix) + 1)
+    return ""
+}
+
+function get_tag(line, key,    f, n, j, v) {
+    n = split(line, f, ",")
+    for (j = 2; j <= n; j++) {
+        v = kv_value(f[j], key)
+        if (v != "")
+            return v
+    }
+    return ""
+}
+
+function load_meta(file,    line, f, n, idx, ticker, suffix, ts, q, high, low, d) {
+    while ((getline line < file) > 0) {
+        if (line ~ /^[[:space:]]*$/)
+            continue
+
+        n = split(line, f, ",")
+        idx = f[1]
+        split(idx, parts, ":")
+        ticker = parts[1]
+        suffix = parts[2]
+
+        if (suffix == "META") {
+            meta_seen[ticker] = 1
+            meta_dd[ticker] = get_tag(line, "DD") + 0
+            meta_ru[ticker] = get_tag(line, "RU") + 0
+            meta_q[ticker]  = get_tag(line, "Q") + 0
+            continue
+        }
+
+        ts = suffix + 0
+        d = fill_date(ts)
+        if (d != date)
+            continue
+
+        q = get_tag(line, "Q") + 0
+        high = get_tag(line, "HIGH") + 0
+        low  = get_tag(line, "LOW") + 0
+
+        day_fill_net_q[ticker] += q
+        fill_count[ticker]++
+        fill_q[ticker, fill_count[ticker]] = q
+        fill_high[ticker, fill_count[ticker]] = high
+        fill_low[ticker, fill_count[ticker]] = low
+        fill_ts[ticker, fill_count[ticker]] = ts
+    }
+    close(file)
+}
+
+function load_ohlcv(ticker,    file, line, f, n) {
+    delete ohlcv
+    file = ohlcv_dir "/" ticker "_Daily_" year ".csv"
+    while ((getline line < file) > 0) {
+        n = split(line, f, ",")
+        if (f[1] == date) {
+            ohlcv["high"] = f[3] + 0
+            ohlcv["low"]  = f[4] + 0
+            close(file)
+            return 1
+        }
+    }
+    close(file)
+    return 0
+}
+
+function min_nonzero(a, b) {
+    if (a == 0) return b
+    if (b == 0) return a
+    return (a < b) ? a : b
+}
+
+function max_nonzero(a, b) {
+    if (a == 0) return b
+    if (b == 0) return a
+    return (a > b) ? a : b
+}
+
+function compute_day_contribs(ticker, base_q,    i, q, side, adds_q, red_q, w_high, w_low, adverse, favorable) {
+    delete contrib
+
+    side = 0
+    if (base_q > 0)
+        side = 1
+    else if (base_q < 0)
+        side = -1
+    else if (day_fill_net_q[ticker] > 0)
+        side = 1
+    else if (day_fill_net_q[ticker] < 0)
+        side = -1
+
+    for (i = 1; i <= fill_count[ticker]; i++) {
+        q = fill_q[ticker, i]
+
+        if (side == 0) {
+            if (q > 0)
+                side = 1
+            else if (q < 0)
+                side = -1
+        }
+
+        if (side == 0)
+            continue
+
+        if (q * side > 0) {
+            adds_q += q
+            w_high += fill_high[ticker, i] * q
+            w_low  += fill_low[ticker, i] * q
+            contrib["count"]++
+        } else if (q * side < 0) {
+            red_q += q
+        }
+    }
+
+    contrib["side"] = side
+    contrib["adds_q"] = adds_q + 0
+    contrib["red_q"] = red_q + 0
+
+    if (adds_q != 0) {
+        contrib["avg_high"] = w_high / adds_q
+        contrib["avg_low"] = w_low / adds_q
+
+        if (side > 0) {
+            adverse = contrib["avg_low"]
+            favorable = contrib["avg_high"]
+        } else {
+            adverse = contrib["avg_high"]
+            favorable = contrib["avg_low"]
+        }
+
+        contrib["adverse"] = adverse
+        contrib["favorable"] = favorable
+    }
+}
+
+function merge_state(ticker, pos_q,    side, old_dd, old_ru, new_dd, new_ru, day_high, day_low, c_adv, c_fav) {
+    delete state
+
+    old_dd = meta_dd[ticker]
+    old_ru = meta_ru[ticker]
+    side = (pos_q > 0) ? 1 : ((pos_q < 0) ? -1 : 0)
+
+    new_dd = old_dd
+    new_ru = old_ru
+# debug
+# printf "new_dd=%0.2f\n", new_dd
+# end_debug
+
+    c_adv = contrib["adverse"] + 0
+    c_fav = contrib["favorable"] + 0
+
+    if ((ticker in meta_seen) && (meta_dd[ticker] + meta_ru[ticker] > 0)) {
+        day_high = ohlcv["high"] + 0
+        day_low = ohlcv["low"] + 0
+    }
+
+    if (side > 0) {
+        if (c_adv > 0) new_dd = min_nonzero(new_dd, c_adv)
+# debug
+# printf "new_dd=%0.2f\n", new_dd
+# end_debug
+        if (c_fav > 0) new_ru = max_nonzero(new_ru, c_fav)
+        if (day_low > 0) new_dd = min_nonzero(new_dd, day_low)
+        if (day_high > 0) new_ru = max_nonzero(new_ru, day_high)
+    } else if (side < 0) {
+        if (c_adv > 0) new_dd = max_nonzero(new_dd, c_adv)
+        if (c_fav > 0) new_ru = min_nonzero(new_ru, c_fav)
+        if (day_high > 0) new_dd = max_nonzero(new_dd, day_high)
+        if (day_low > 0) new_ru = min_nonzero(new_ru, day_low)
+    }
+
+    state["dd"] = new_dd
+    state["ru"] = new_ru
+    state["side"] = side
+}
+
+function persist_meta(ticker, pos_q,    idx, kv, i) {
+    idx = ticker ":META"
+    delete kv
+
+    for (i = 1; i <= fill_count[ticker]; i++) {
+        data_cache_delete_key(meta_file, ticker ":" fill_ts[ticker, i], "HIGH")
+        data_cache_delete_key(meta_file, ticker ":" fill_ts[ticker, i], "LOW")
+    }
+
+    if (pos_q == 0) {
+        data_cache_delete_record(meta_file, idx)
+        return
+    }
+
+    kv["DD"] = sprintf("%.2f", state["dd"])
+    kv["RU"] = sprintf("%.2f", state["ru"])
+    kv["Q"]  = sprintf("%d", pos_q)
+    data_cache_set(meta_file, idx, kv)
+}
+
+NR == 1 {
+    print $0, "DD,RU,LOW,HIGH,DD++?,RU++?"
+}
+
+NR > 1 {
+    ticker = $2
+    pos_q = $3 + 0
+    record = $0
+
+    delete contrib
+    delete state
+    delete ohlcv
+
+# debug
+# print "AFTER LOAD_META:"
+# for (deb_i=1; deb_i <= 3; deb_i++)
+# printf "fill_high=%0.2f ", fill_high["BA", deb_i]
+# print "\n"
+# printf "fill_count[%s]=%i\n", ticker,  fill_count[ticker]
+# printf "day_fill_net_q[%s]=%i\n", ticker,  day_fill_net_q[ticker]
+# printf "meta_q[BA]=%0.2f\n", meta_q["BA"]
+# printf "meta_seen[%s]=%s\n", ticker, meta_seen[ticker]
+# printf "meta_dd[%s]=%0.2f ", ticker, meta_dd[ticker]
+# printf "meta_ru[%s]=%0.2f\n", ticker, meta_ru[ticker]
+# exit
+# end debug
+
+    compute_day_contribs(ticker, meta_q[ticker] + 0)
+
+# debug
+# print "AFTER COMPUTE_DAY_CONTRIBS:"
+# for (deb_idx in contrib)
+# printf("contrib[%s]=%s\n", deb_idx, contrib[deb_idx])
+# end debug
+
+    got_ohlcv = load_ohlcv(ticker)
+    merge_state(ticker, pos_q)
+
+# debug
+# print "AFTER MERGE_STATE:"
+# for (deb_idx in state)
+# printf "state[%s]=%s\n", deb_idx, state[deb_idx]
+# end debug
+
+    if (ticker in meta_seen) {
+        dd_changed = ((meta_dd[ticker] + 0) != (state["dd"] + 0)) ? 1 : 0
+        ru_changed = ((meta_ru[ticker] + 0) != (state["ru"] + 0)) ? 1 : 0
+    } else {
+        dd_changed = 0
+        ru_changed = 0
+    }
+
+    out_low = 0
+    out_high = 0
+    if (contrib["count"] > 0) {
+        out_low = contrib["avg_low"] + 0
+        out_high = contrib["avg_high"] + 0
+    } else if (got_ohlcv) {
+        out_low = ohlcv["low"] + 0
+        out_high = ohlcv["high"] + 0
+    }
+
+    if (update)
+        persist_meta(ticker, pos_q)
+
+    printf "%s,%.2f,%.2f,%.2f,%.2f,%d,%d\n",
+        record,
+        state["dd"] + 0,
+        state["ru"] + 0,
+        out_low,
+        out_high,
+        dd_changed,
+        ru_changed
+}
+

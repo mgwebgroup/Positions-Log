@@ -34,7 +34,7 @@ BEGIN {
 	if ("DATE" in ENVIRON)
 		date = ENVIRON["DATE"]
 	if ("OHLCV_DIR" in ENVIRON)
-		ohlcv_dir = ENVIRON["DATA_DIR"]
+		ohlcv_dir = ENVIRON["OHLCV_DIR"]
 }
 
 NR == 1 {
