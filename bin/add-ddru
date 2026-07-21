@@ -155,6 +155,12 @@ function compute_day_contribs(ticker, base_q,    i, q, side, adds_q, red_q, w_hi
     else if (day_fill_net_q[ticker] < 0)
         side = -1
 
+	if (base_q * day_fill_net_q[ticker] < 0) {
+		side = 0
+	}
+
+
+
     for (i = 1; i <= fill_count[ticker]; i++) {
         q = fill_q[ticker, i]
 
@@ -193,20 +199,24 @@ function compute_day_contribs(ticker, base_q,    i, q, side, adds_q, red_q, w_hi
             adverse = contrib["avg_high"]
             favorable = contrib["avg_low"]
         }
-
-        contrib["adverse"] = adverse
-        contrib["favorable"] = favorable
     }
+
+	contrib["adverse"] = adverse
+	contrib["favorable"] = favorable
 }
 
 function merge_state(ticker, pos_q,    side, old_dd, old_ru, new_dd, new_ru, day_high, day_low, c_adv, c_fav) {
     delete state
 
-    old_dd = meta_dd[ticker]
-    old_ru = meta_ru[ticker]
+	carry_prior_state = (pos_q * meta_q[ticker] > 0)
+	if (carry_prior_state) {
+		old_dd = meta_dd[ticker]
+		old_ru = meta_ru[ticker]
+	}
+
     side = (pos_q > 0) ? 1 : ((pos_q < 0) ? -1 : 0)
 
-    new_dd = old_dd
+	new_dd = old_dd
     new_ru = old_ru
 # debug
 # printf "new_dd=%0.2f\n", new_dd
@@ -215,16 +225,13 @@ function merge_state(ticker, pos_q,    side, old_dd, old_ru, new_dd, new_ru, day
     c_adv = contrib["adverse"] + 0
     c_fav = contrib["favorable"] + 0
 
-    if ((ticker in meta_seen) && (meta_dd[ticker] + meta_ru[ticker] > 0)) {
-        day_high = ohlcv["high"] + 0
-        day_low = ohlcv["low"] + 0
-    }
+	if ((ticker in meta_seen) && (meta_dd[ticker] + meta_ru[ticker] > 0) && carry_prior_state) {
+		day_high = ohlcv["high"] + 0
+		day_low  = ohlcv["low"] + 0
+	}
 
     if (side > 0) {
         if (c_adv > 0) new_dd = min_nonzero(new_dd, c_adv)
-# debug
-# printf "new_dd=%0.2f\n", new_dd
-# end_debug
         if (c_fav > 0) new_ru = max_nonzero(new_ru, c_fav)
         if (day_low > 0) new_dd = min_nonzero(new_dd, day_low)
         if (day_high > 0) new_ru = max_nonzero(new_ru, day_high)
@@ -274,46 +281,63 @@ NR > 1 {
     delete ohlcv
 
 # debug
-# print "AFTER LOAD_META:"
-# for (deb_i=1; deb_i <= 3; deb_i++)
-# printf "fill_high=%0.2f ", fill_high["BA", deb_i]
-# print "\n"
-# printf "fill_count[%s]=%i\n", ticker,  fill_count[ticker]
-# printf "day_fill_net_q[%s]=%i\n", ticker,  day_fill_net_q[ticker]
-# printf "meta_q[BA]=%0.2f\n", meta_q["BA"]
-# printf "meta_seen[%s]=%s\n", ticker, meta_seen[ticker]
-# printf "meta_dd[%s]=%0.2f ", ticker, meta_dd[ticker]
-# printf "meta_ru[%s]=%0.2f\n", ticker, meta_ru[ticker]
+	print "AFTER READING RECORD:"
+	printf "ticker=%s pos_q=%i\n", ticker, pos_q
+# end debug
+
+# debug
+print "AFTER LOAD_META:"
+for (deb_i=1; deb_i <= 3; deb_i++) {
+	printf "deb_i=%i:\n", deb_i
+	printf "fill_high=%0.2f ", fill_high[ticker, deb_i]
+	printf "fill_low=%0.2f ", fill_low[ticker, deb_i]
+	printf "fill_q[%s, %i]=%i ", ticker, deb_i,  fill_q[ticker, deb_i]
+	print "\n"
+}
+printf "fill_count[%s]=%i\n", ticker,  fill_count[ticker]
+printf "fill_ts[%s]=%i\n", ticker,  fill_ts[ticker]
+printf "day_fill_net_q[%s]=%i\n", ticker,  day_fill_net_q[ticker]
+printf "meta_q[%s]=%0.2f\n", ticker, meta_q[ticker]
+printf "meta_seen[%s]=%s\n", ticker, meta_seen[ticker]
+printf "meta_dd[%s]=%0.2f ", ticker, meta_dd[ticker]
+printf "meta_ru[%s]=%0.2f\n", ticker, meta_ru[ticker]
 # exit
 # end debug
 
     compute_day_contribs(ticker, meta_q[ticker] + 0)
 
 # debug
-# print "AFTER COMPUTE_DAY_CONTRIBS:"
-# for (deb_idx in contrib)
-# printf("contrib[%s]=%s\n", deb_idx, contrib[deb_idx])
+print "AFTER COMPUTE_DAY_CONTRIBS:"
+for (deb_idx in contrib)
+	printf("contrib[%s]=%s\n", deb_idx, contrib[deb_idx])
 # end debug
 
     got_ohlcv = load_ohlcv(ticker)
     merge_state(ticker, pos_q)
 
 # debug
-# print "AFTER MERGE_STATE:"
-# for (deb_idx in state)
-# printf "state[%s]=%s\n", deb_idx, state[deb_idx]
+print "AFTER MERGE_STATE:"
+for (deb_idx in state)
+printf "state[%s]=%s\n", deb_idx, state[deb_idx]
 # end debug
 
-    if (ticker in meta_seen) {
-        dd_changed = ((meta_dd[ticker] + 0) != (state["dd"] + 0)) ? 1 : 0
-        ru_changed = ((meta_ru[ticker] + 0) != (state["ru"] + 0)) ? 1 : 0
-    } else {
-        dd_changed = 0
-        ru_changed = 0
-    }
+	same_side = ((ticker in meta_seen) && (meta_q[ticker] * pos_q > 0)) ? 1 : 0
+
+# debug
+printf "same_side=%i\n", same_side
+# end debug
+
+	if (same_side) {
+		dd_changed = ((meta_dd[ticker] + 0) != (state["dd"] + 0)) ? 1 : 0
+		ru_changed = ((meta_ru[ticker] + 0) != (state["ru"] + 0)) ? 1 : 0
+	} else {
+		dd_changed = 0
+		ru_changed = 0
+	}
 
     out_low = 0
     out_high = 0
+
     if (contrib["count"] > 0) {
         out_low = contrib["avg_low"] + 0
         out_high = contrib["avg_high"] + 0
