@@ -5,6 +5,7 @@
 # Reads consolidated positions from stdin or a CSV file with header, uses:
 #   1) meta.csv records keyed as TICKER:<TIMESTAMP> and TICKER:META
 #   2) OHLCV files keyed by YYYY-MM-DD
+#   3) Consolidated positions file is produced by `bin/add_unrealized`
 #
 # It outputs the input rows plus:
 #   DD,RU,LOW,HIGH,DD++,RU++
@@ -20,6 +21,8 @@
 # - date=YYYY-MM-DD is mandatory and used to read OHLCV rows.
 # - ohlcv_dir points to directory holding TICKER_Daily_YYYY.csv files.
 # - TZ environment should be set to the desired trading-session timezone.
+# - update=1 modifies meta file to consolidate all TICKER:TIMESTAMP rows and 
+#   then compute DD, RU and Q fields for the TICKER:META record.
 #
 # Example:
 #   TZ=America/New_York ./add_ddru.awk \
@@ -28,6 +31,7 @@
 #     -v ohlcv_dir=Data/OHLCV \
 #     -v update=1 \
 #     consolidated_positions.csv
+
 
 @include "data_cache.awk"
 
@@ -281,50 +285,50 @@ NR > 1 {
     delete ohlcv
 
 # debug
-	print "AFTER READING RECORD:"
-	printf "ticker=%s pos_q=%i\n", ticker, pos_q
+# print "AFTER READING RECORD:"
+# printf "ticker=%s pos_q=%i\n", ticker, pos_q
 # end debug
 
 # debug
-print "AFTER LOAD_META:"
-for (deb_i=1; deb_i <= 3; deb_i++) {
-	printf "deb_i=%i:\n", deb_i
-	printf "fill_high=%0.2f ", fill_high[ticker, deb_i]
-	printf "fill_low=%0.2f ", fill_low[ticker, deb_i]
-	printf "fill_q[%s, %i]=%i ", ticker, deb_i,  fill_q[ticker, deb_i]
-	print "\n"
-}
-printf "fill_count[%s]=%i\n", ticker,  fill_count[ticker]
-printf "fill_ts[%s]=%i\n", ticker,  fill_ts[ticker]
-printf "day_fill_net_q[%s]=%i\n", ticker,  day_fill_net_q[ticker]
-printf "meta_q[%s]=%0.2f\n", ticker, meta_q[ticker]
-printf "meta_seen[%s]=%s\n", ticker, meta_seen[ticker]
-printf "meta_dd[%s]=%0.2f ", ticker, meta_dd[ticker]
-printf "meta_ru[%s]=%0.2f\n", ticker, meta_ru[ticker]
-# exit
+# print "AFTER LOAD_META:"
+# for (deb_i=1; deb_i <= 3; deb_i++) {
+# 	printf "deb_i=%i:\n", deb_i
+# 	printf "fill_high=%0.2f ", fill_high[ticker, deb_i]
+# 	printf "fill_low=%0.2f ", fill_low[ticker, deb_i]
+# 	printf "fill_q[%s, %i]=%i ", ticker, deb_i,  fill_q[ticker, deb_i]
+# 	print "\n"
+# }
+# printf "fill_count[%s]=%i\n", ticker,  fill_count[ticker]
+# printf "fill_ts[%s]=%i\n", ticker,  fill_ts[ticker]
+# printf "day_fill_net_q[%s]=%i\n", ticker,  day_fill_net_q[ticker]
+# printf "meta_q[%s]=%0.2f\n", ticker, meta_q[ticker]
+# printf "meta_seen[%s]=%s\n", ticker, meta_seen[ticker]
+# printf "meta_dd[%s]=%0.2f ", ticker, meta_dd[ticker]
+# printf "meta_ru[%s]=%0.2f\n", ticker, meta_ru[ticker]
+# # exit
 # end debug
 
     compute_day_contribs(ticker, meta_q[ticker] + 0)
 
 # debug
-print "AFTER COMPUTE_DAY_CONTRIBS:"
-for (deb_idx in contrib)
-	printf("contrib[%s]=%s\n", deb_idx, contrib[deb_idx])
+# print "AFTER COMPUTE_DAY_CONTRIBS:"
+# for (deb_idx in contrib)
+# 	printf("contrib[%s]=%s\n", deb_idx, contrib[deb_idx])
 # end debug
 
     got_ohlcv = load_ohlcv(ticker)
     merge_state(ticker, pos_q)
 
 # debug
-print "AFTER MERGE_STATE:"
-for (deb_idx in state)
-printf "state[%s]=%s\n", deb_idx, state[deb_idx]
+# print "AFTER MERGE_STATE:"
+# for (deb_idx in state)
+# printf "state[%s]=%s\n", deb_idx, state[deb_idx]
 # end debug
 
 	same_side = ((ticker in meta_seen) && (meta_q[ticker] * pos_q > 0)) ? 1 : 0
 
 # debug
-printf "same_side=%i\n", same_side
+# printf "same_side=%i\n", same_side
 # end debug
 
 	if (same_side) {

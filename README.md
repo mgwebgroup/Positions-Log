@@ -1,64 +1,84 @@
-# Trade Journal and P&L Toolkit
+# Trade Journal and P\&L Toolkit
 
-A small shell and AWK toolkit for recording trade executions, attaching lightweight per-position metadata, and computing realized and unrealized P&L from a CSV journal.
+A small shell and AWK toolkit for:
 
-The package is organized around two ideas:
+- Recording trade executions into a CSV journal
+- Attaching lightweight per-position metadata (stop loss, price target, intraday high/low)
+- Computing realized and unrealized P\&L
+- Computing per-position drawdowns and runups (DD/RU)
+- Computing account equity over time
 
-- `bin/enter-trade` appends validated executions to a journal CSV and keeps the file sorted by timestamp.
-- `bin/enter-meta` captures additional trade metadata such as stop loss, intraday high, intraday low, price target, and quantity for the just-entered trade.
-
-The analytics layer is implemented in AWK:
-
-- `bin/compute-realized` consolidates journal entries into per-symbol position state and realized P&L
-- `bin/add-unrealized` enriches those consolidated positions with closing prices from OHLCV files and computes unrealized P&L.
-- `bin/get-balance` Computes a tuple of _YYYY-MM-DD,Balance_ output to stdout. Uses output of add-unrealized
+The package is designed to work with local CSV data, accessed via environment variables and a simple `bin/` command set.
 
 
 ## Package layout
 
+Typical repository layout:
+
 ```text
-├── bin
-│   ├── enter-trade
-│   ├── enter-meta
-│   ├── compute-realized
-│   ├── add-unrealized
-│   └── get-balance 
-├── lib
-│   └── bash
-│      └── validation.sh
-├── LICENSE
-├── env.sh
-├── env.sh.example
-└── README.md
+bin/
+  enter-trade       # interactive trade entry
+  enter-meta        # metadata entry for a just-entered trade
+  compute-realized  # realized P&L and per-symbol position consolidation
+  add-unrealized    # append unrealized P&L from OHLCV close prices
+  add-ddru          # append DD/RU, intraday low/high, flags
+  get-balance       # compute account balance from realized+unrealized P&L
+
+lib/
+  bash/validation.sh
+  awk/data_cache.awk
+  awk/...           # AWK helpers
+
+env.sh
+env.sh.example
+README.md
+LICENSE
 ```
+
+The `bin/` scripts expect `env.sh` to set the relevant file paths and default values.
 
 
 ## Data files
 
-The package works with local data files configured through environment variables:
+The toolkit uses three main data files:
 
-- `JOURNAL` points to the trade journal CSV.
-- `META_FILE` points to the metadata file used by `enter-meta`.
-- `OHLCV_DIR` points to directory with OHLCV files.
+1. **Journal CSV** — trade executions (one row per execution)
+2. **Metadata CSV** — per-trade intraday info and per-symbol DD/RU state
+3. **OHLCV files** — per-ticker daily bar data used for unrealized P\&L and DD/RU
 
-OHLCV files must be named as: `TICKER_Daily_YYYY.csv`.
-The journal file is created automatically if it does not exist, with the following header:
+### Journal file
+
+The journal file is a CSV with a header like:
 
 ```csv
-TIMESTAMP,INSTRUMENT,QUANTITY,PRICE,CURRENCY,COMMISSION,EXCHANGE_EXEC_ID,ORDER_ID,ACCOUNT_NO,EXCHANGE_NAME,CUSIP
+TIMESTAMP,INSTRUMENT,QUANTITY,PRICE,CURRENCY,COMMISSION,EXCHANGE_EXEC_ID,ORDERID,ACCOUNTNO,EXCHANGENAME,CUSIP
 ```
 
-Example journal rows:
+Example rows:
 
 ```csv
 1767369650,PANW,-10,178.99,USD,0.354207,376654950S,0036BA34.00031198.6957591D.0001,U1451183,IBKRATS,
 1767623401,COIN,-6,247.50,USD,0.352627,0308193782,0036BA34.00031198.695B4ABA.0001,U1451183,IBKRATS,
 ```
 
-The metadata file is a plain text file with one row per keyed trade entry. The current `enter-meta` implementation stores rows in this format:
+Conventions:
+
+- `TIMESTAMP` is a Unix epoch seconds value in your chosen trading time zone.
+- `QUANTITY` is signed; negative for shorts, positive for longs.
+- `EXCHANGE_EXEC_ID` is treated as the unique execution identity and is used for de-duplication.
+- `CUSIP` may be blank; it is present for completeness but not used in P\&L logic.
+
+`bin/enter-trade` creates the journal file if it does not exist and maintains the header.
+
+
+### Metadata file
+
+The metadata file is a plain text file with two types of records:
+
+1. **Per-fill intraday records (same day)**:
 
 ```text
-<INSTRUMENT>:<TIMESTAMP>,SL:<PRICE>,HIGH:<PRICE>,LOW:<PRICE>,PT:<PRICE>,Q:<QUANTITY>
+INSTRUMENT:TIMESTAMP,SL:PRICE,HIGH:PRICE,LOW:PRICE,PT:PRICE,Q:QUANTITY
 ```
 
 Example:
@@ -67,216 +87,410 @@ Example:
 PANW:1767369650,SL:200.00,HIGH:180.00,LOW:170.00,PT:150.00,Q:-10
 ```
 
-Field meanings:
+Fields:
+    - `SL` – stop loss at entry time.
+    - `HIGH` – intraday high recorded at/for that fill.
+    - `LOW` – intraday low recorded at/for that fill.
+    - `PT` – price target.
+    - `Q` – fill quantity, signed, matching the journal convention.
 
-- `SL`: stop loss.
-- `HIGH`: intraday high recorded at entry time.
-- `LOW`: intraday low recorded at entry time.
-- `PT`: price target.
-- `Q`: quantity; negative values represent short positions, matching the journal convention.
+These records are used intraday by the DD/RU updater to seed per-symbol extremes and then are partially or fully consumed as state is consolidated.
 
-Meta data file is used for figuring dialy drawdowns and runups for all positions.
+2. **Per-symbol state records (durable)**:
 
+```text
+INSTRUMENT:META,DD:PRICE,RU:PRICE,Q:QUANTITY
+```
+
+Example:
+
+```text
+PANW:META,DD:165.00,RU:195.50,Q:-10
+```
+
+Fields:
+    - `DD` – worst adverse price seen so far for that open position (drawdown anchor).
+    - `RU` – best favorable price seen so far for that open position (runup anchor).
+    - `Q` – current open quantity for the symbol.
+
+The metadata file is maintained automatically by `bin/add-ddru`. You normally only write new `INSTRUMENT:TIMESTAMP` rows via `bin/enter-meta`; `INSTRUMENT:META` rows and the removal of used intraday keys are handled by the AWK script.
+
+
+### OHLCV files
+
+OHLCV files are per-symbol, per-year CSVs with the name:
+
+```text
+TICKER_Daily_YYYY.csv
+```
+
+Example filename:
+
+```text
+AAPL_Daily_2026.csv
+```
+
+Format:
+
+```csv
+Date,Open,High,Low,Close,Volume
+```
+
+Constraints:
+
+- `Date` is in `YYYY-MM-DD` format.
+- `Close` is the 5th field and is used for unrealized P\&L.
+- `High` and `Low` are the 3rd and 4th fields and are used for DD/RU updates.
 
 
 ## Configuration
 
-Copy `env.sh.example` to `env.sh` or edit `env.sh` directly and set the file paths and defaults used by the entry workflow.
+Copy `env.sh.example` to `env.sh` and edit it (or edit `env.sh` directly) to define the paths and defaults used by the entry and analytics workflow.
 
-Typical variables include:
+Typical variables:
 
 ```bash
-JOURNAL=/absolute/path/to/Data/Positions/Journal_2026.csv
-META_FILE=/absolute/path/to/Data/Positions/meta.csv
-OHLCV_DIR=/absolute/path/to/OHLCV/dir"
+# Absolute path to the journal file
+JOURNAL="/absolute/path/to/Data/Positions/Journal_2026.csv"
 
-TIMEZONE='-04:00' # default timezone to be used for times of order entry
-COMMISSION='0.35'
-CURRENCY=USD
-ORDER_ID='abcdef01.02030405.abddef' # first digits usually are repeatable
-ACCOUNT_NO=ABCD1
-EXCHANGE_NAME=IBKRATS
+# Absolute path to metadata file
+META_FILE="/absolute/path/to/Data/Positions/meta.csv"
+
+# Directory containing OHLCV files like TICKER_Daily_YYYY.csv
+OHLCV_DIR="/absolute/path/to/OHLCV"
+
+# Default timezone offset for entry timestamps (used by entry.sh)
+TIMEZONE="-0400"
+
+# Default commission per trade
+COMMISSION="0.35"
+
+# Default currency code
+CURRENCY="USD"
+
+# Default values used during entry; must pass validation
+ORDERID="abcdef01.02030405.abddef"
+ACCOUNTNO="ABCD1"
+EXCHANGENAME="IBKRATS"
 ```
 
 Notes:
 
-- `TIMEZONE` should be specified as a UTC offset such as `-04:00`.
-- Default values should satisfy the regex and numeric checks implemented in `lib/bash/validation.sh`.
-- `CUSIP` is present in the journal schema, but the sample workflow allows it to be blank.
+- `TIMEZONE` must be a UTC offset like `-0400`.
+- Defaults must satisfy the regex/numeric checks in `lib/bash/validation.sh`.
+- `env.sh` is sourced by the entry script and should be version-controlled or templated as appropriate.
 
 
+## Command overview
 
-## Typical usage
+The main user-facing commands are:
 
-### 1. Enter a trade
+- `bin/enter-trade` – interactive trade entry into the journal.
+- `bin/enter-meta` – interactive metadata entry for the last trade.
+- `bin/compute-realized` – consolidate trades and compute realized P\&L.
+- `bin/add-unrealized` – append unrealized P\&L using OHLCV close prices.
+- `bin/add-ddru` – append drawdown/runup, daily lows/highs, and change flags.
+- `bin/get-balance` – compute account equity given realized + unrealized P\&L.
 
-Run the main entry script:
+Each command is designed to be used either by itself or as a step in an end-to-end daily pipeline.
+
+***
+
+## Entry workflow
+
+### 1. Enter a trade – `bin/enter-trade`
+
+Run:
 
 ```bash
-./bin/enter-trade
+. bin/enter-trade
 ```
 
-The script interactively prompts for:
+This script:
 
-- `ORDER_DATE`, which is converted to Unix timestamp and stored as `TIMESTAMP`.
-- `INSTRUMENT`.
-- `QUANTITY`.
-- `PRICE`.
-- `CURRENCY`.
-- `COMMISSION`.
-- `EXCHANGE_EXEC_ID`.
-- `ORDER_ID`.
-- `ACCOUNT_NO`.
-- `EXCHANGE_NAME`.
+- Sources `env.sh` and `lib/bash/validation.sh`.
+- Prompts interactively for:
+    - `ORDERDATE` – converted to Unix timestamp (`TIMESTAMP`) via `date -d ...`.
+    - `INSTRUMENT`
+    - `QUANTITY`
+    - `PRICE`
+    - `CURRENCY`
+    - `COMMISSION`
+    - `EXCHANGE_EXEC_ID`
+    - `ORDERID`
+    - `ACCOUNTNO`
+    - `EXCHANGENAME`
+- Validates each field with the functions in `lib/bash/validation.sh`.
+- Creates the journal file with header if it does not exist.
+- Deletes any existing journal row with the same `EXCHANGE_EXEC_ID`.
+- Appends the new row.
+- Re-sorts the journal CSV by `TIMESTAMP` (`sort -t, -n -k1,1`) and removes blank lines.
 
-After input is validated, `enter-trade` removes any existing journal row with the same `EXCHANGE_EXEC_ID`, appends the new row, sorts the journal by timestamp, and removes blank lines. This makes journal entry idempotent with respect to execution ID. 
+This makes the journal idempotent with respect to `EXCHANGE_EXEC_ID`: re-entering the same execution simply replaces the old row.
+
+At the end of each trade, `enter-trade` optionally calls `bin/enter-meta` to capture metadata for that trade.
 
 
-### 2. Enter metadata for the trade
+### 2. Enter metadata – `bin/enter-meta`
 
-After the execution is written, `enter-trade` asks whether to enter metadata. If the answer is yes, it sources `enter-meta`.
+`bin/enter-meta` is a shell script that must be sourced from the entry context so it can see the current `INSTRUMENT`, `TIMESTAMP`, and `QUANTITY`:
 
-`enter-meta` prompts for:
+```bash
+. bin/enter-trade  # will source bin/enter-meta when you answer "yes"
+```
 
-- `SL` (stop loss).
-- `Intraday High`.
-- `Intraday Low`.
-- `Price Target`.
+`enter-meta`:
 
-As opposed to `enter-trade` rule on idempotency, `enter-meta` allows for multiple entries with same `<INSTRUMENT>:<TIMESTAMP>` keys. This is because brokers may split an order and route it to several exchanges. In this way, execution time may be same, yet `EXCHANGE_EXEC_ID` will be unique.
+- Ensures `META_FILE` exists (touch if missing).
+- Prompts for:
+    - `SL` – stop loss
+    - `INTRAHIGH` – intraday high
+    - `INTRALOW` – intraday low
+    - `PT` – price target
+- Validates each value (`validatesl`, `validateintrahigh`, `validateintralow`, `validatept`).
+- Writes a row keyed by `INSTRUMENT:TIMESTAMP` into `META_FILE`:
+
+```text
+INSTRUMENT:TIMESTAMP,SL:...,HIGH:...,LOW:...,PT:...,Q:QUANTITY
+```
+
+
+If you re-run metadata entry for the same `INSTRUMENT:TIMESTAMP`, the new values replace the previous row for that key.
 
 
 ### 3. Enter another trade
 
-At the end of each loop, `enter-trade` asks whether to enter one more record and repeats the process until the answer is no.
+At the end of each loop, `enter-trade` asks whether to enter another record and repeats until you answer “no”.
+
+***
 
 
+## Realized P\&L – `bin/compute-realized`
 
-## Realized P&L
+`bin/compute-realized` reads the journal and emits per-symbol consolidated positions with realized P\&L.
 
-`bin/compute-realized` reads the journal and emits consolidated per-symbol position state with realized P&L. The output columns are:
-
-```csv
-TIMESTAMP,INSTRUMENT,QUANTITY,AVG_BASE_PRICE,CURRENCY,COMMISSION,REAL_P&L
-```
-
-The script is intended to be run with a start and end Unix timestamp and a journal path:
+Usage pattern:
 
 ```bash
-./bin/compute-realized \
-  start_ts=$(date -d '2026-01-01T09:30-05:00' +%s) \
-  end_ts=$(date +%s) \
-  "${JOURNAL}"
+TZ=America/New_York \
+bin/compute-realized \
+  -v start_ts="$(date -d '2026-01-01T09:30:00-05:00' '+%s')" \
+  -v end_ts="$(date   -d '2026-07-22T16:30:00-04:00' '+%s')" \
+  "$JOURNAL" > tmp_realized_positions.csv
+```
+
+Output columns:
+
+```csv
+TIMESTAMP,INSTRUMENT,QUANTITY,AVGBASEPRICE,CURRENCY,COMMISSION,REALPL
 ```
 
 What it does:
 
 - Reads journal rows after the header.
 - Filters rows to `start_ts <= TIMESTAMP <= end_ts`.
-- Aggregates quantity by symbol.
-- Maintains an average base price for the open position.
-- Accumulates realized P&L when trades reduce, close, or reverse an existing position.
+- For each symbol:
+    - Tracks cumulative `QUANTITY` (signed).
+    - Maintains a moving `AVGBASEPRICE` for the open position.
+    - Adjusts realized P\&L (`REALPL`) when trades reduce or reverse an existing position:
+        - Pure adds adjust `AVGBASEPRICE` without P\&L.
+        - Reductions compute P\&L versus the current `AVGBASEPRICE`.
+        - Complete flips (through zero) reset base price to the new side.
+- Deducts `COMMISSION` from realized P\&L.
 
-The script also documents a manual reset convention: to reset quantity for a symbol, insert a journal row with that symbol and `0` quantity, leaving the remaining fields empty.
-
-Example reset row:
+There is a documented “reset row” convention: to forcefully reset a symbol’s quantity and base price, you can insert a journal row with that symbol and zero quantity while leaving most other fields blank, for example:
 
 ```csv
 1763728636,ORCL,0,,,,,,,
 ```
 
+This appears to the consolidator as a manual position reset.
 
-## Unrealized P&L
+***
 
-`bin/add-unrealized` takes the consolidated output of `compute-realized`, looks up a closing price for each symbol from per-ticker OHLCV files, and appends unrealized P&L column.
+## Unrealized P\&L – `bin/add-unrealized`
 
-Expected invocation:
+`bin/add-unrealized` takes the output of `compute-realized`, looks up a closing price for each symbol from OHLCV files, and appends an unrealized P\&L column.
+
+Usage:
 
 ```bash
-./bin/add-unrealized \
-  date=YYYY-MM-DD \
-  ohlcv_dir=${OHLCV_DIR} \
-  /path/to/consolidated_positions.csv
+bin/add-unrealized \
+  -v date=YYYY-MM-DD \
+  -v ohlcv_dir="$OHLCV_DIR" \
+  tmp_realized_positions.csv > tmp_unrealized_positions.csv
 ```
 
-Requirements for OHLCV files:
+Where:
 
-- Files must live under the directory passed as `ohlcv_dir`.
-- File names must follow `TICKER_Daily_YYYY.csv`.
-- File format must be `Date,Open,High,Low,Close,Volume`.
-- The script uses the fifth field, `Close`, to compute unrealized P&L.
+- `date` is the closing date in `YYYY-MM-DD` format.
+- `ohlcv_dir` is the directory containing `TICKER_Daily_YYYY.csv`.
 
-Example OHLCV file name:
+Requirements:
+
+- OHLCV filename: `TICKER_Daily_YYYY.csv`.
+- OHLCV format: `Date,Open,High,Low,Close,Volume`.
+- The `Close` field (5th) is used as the closing price.
+
+Behavior:
+
+- For each consolidated position row:
+    - If `QUANTITY == 0`: unrealized P\&L is `0`.
+    - Otherwise, it opens `TICKER_Daily_YYYY.csv`, finds the row where `Date == date`, reads `Close`, and computes:
 
 ```text
-AAPL_Daily_2026.csv
+UNRPL = (Close - AVGBASEPRICE) * QUANTITY
 ```
 
-Example OHLCV row:
+- Appends `UNRPL` as an additional column.
+
+If either the OHLCV file or the date row is missing, the unrealized P\&L for that symbol is `0`.
+
+***
+
+
+## Drawdowns and runups – `bin/add-ddru`
+
+`bin/add-ddru` enriches consolidated positions (typically the output of `add-unrealized`) with drawdown and runup state, using metadata and OHLCV data.
+
+Usage:
+
+```bash
+TZ=America/New_York \
+bin/add-ddru \
+  -v date=YYYY-MM-DD \
+  -v meta_file="$META_FILE" \
+  -v ohlcv_dir="$OHLCV_DIR" \
+  -v update=1 \
+  tmp_unrealized_positions.csv > tmp_positions_with_ddru.csv
+```
+
+Inputs:
+
+- `date` – trading date to process.
+- `meta_file` – path to metadata file with `INSTRUMENT:TIMESTAMP` and `INSTRUMENT:META` rows.
+- `ohlcv_dir` – directory with `TICKER_Daily_YYYY.csv`.
+- `update` – if `1`, updates `meta_file` in place (DD/RU state and consumption of intraday keys).
+
+Output columns (appended):
 
 ```csv
-2026-07-13,210.00,214.20,208.50,213.75,51234000
+DD,RU,LOW,HIGH,DD++?,RU++?
+```
+
+Semantics:
+
+- For each consolidated position row (one per symbol):
+    - Reads same-day `INSTRUMENT:TIMESTAMP` rows for that symbol from `meta_file` and computes a quantity-weighted intraday low/high based on those fills.
+    - Reads existing `INSTRUMENT:META` state, if any, to get prior `DD`, `RU`, and `Q`.
+    - Determines the position side (`>0` long, `<0` short).
+    - If the prior quantity and current quantity have the **same sign**, the script:
+        - Updates `DD` and `RU` using:
+            - Intraday adverse and favorable extremes from metadata.
+            - Daily `High`/`Low` from OHLCV for that symbol and date.
+        - Marks `DD++?` and `RU++?` as `1` if the new `DD` or `RU` are different from the prior state.
+    - If the prior and current quantities are of **different signs** (flip through zero), or there was no prior `META` state:
+        - Treats the day as a new regime for DD/RU.
+        - Seeds `DD` and `RU` from intraday data (and possibly OHLCV), but does **not** mark `DD++?` or `RU++?` as changes relative to prior state (`DD++? = 0`, `RU++? = 0`).
+    - Emits `LOW` and `HIGH` as:
+        - The intraday quantity-weighted low/high if there were same-day fills.
+        - Otherwise, the OHLCV day low/high if available.
+        - Otherwise, `0` if no data.
+- If `update == 1`, it:
+    - Writes back the new `INSTRUMENT:META` state row.
+    - Clears `HIGH`/`LOW` keys from per-fill `INSTRUMENT:TIMESTAMP` records that have been consumed.
+
+This makes `meta_file` reflect the latest DD/RU state and avoids double-counting intraday fills across runs.
+
+***
+
+
+## Account balance – `bin/get-balance`
+
+`bin/get-balance` consumes the output of `add-unrealized` (or `add-ddru`, which carries forward the same columns) and produces `YYYY-MM-DD,Balance` for a point in time.
+
+Usage:
+
+```bash
+bin/get-balance \
+  -v balance=10000 \
+  -v ts="$(date -d '2026-07-22T17:30:00-04:00' '+%s')" \
+  tmp_unrealized_positions.csv
+```
+
+Behavior:
+
+- Treats the initial `balance` as starting equity.
+- For each row:
+    - Adds `REALPL + UNRPL - COMMISSION` to the running balance.
+    - Tracks the maximum `TIMESTAMP` observed.
+- At `END`, prints:
+
+```text
+YYYY-MM-DD,Balance
 ```
 
 
-## Computing Account Balance
+Where `YYYY-MM-DD` is derived from the maximum timestamp, and `Balance` is the final equity including realized and unrealized P\&L up to that timestamp.
 
-'bin/get-balance' takes output of `add-unrealized` and using the date supplied via ts argument outputs a tuple _YYYY-MM-DD,Balance_
-
-Expected invocation:
-
-```bash
-./bin/get-balance \
-  ts=$(date -d 2020-01-02T17:30-04:00 +%s) \
-  balance=10000
-  Path/to/output/of/add-unrealized
-
-```
+***
 
 
+## End-to-end daily example
 
-## End-to-end example
-
-A typical workflow looks like this:
+A typical daily flow might look like:
 
 ```bash
-# 1. Source the env.sh file to be able to callout needed directories by variable names
+cd Positions-Log
+
+# 1. Load environment
 source env.sh
 
-# 2. Enter one or more trades interactively
-./bin/enter-trade
+# 2. Interactively enter one or more trades
+. bin/enter-trade
 
-# 3. Compute realized P&L over a date range
-./bin/compute-realized \
-  start_ts=$(date -d '2026-01-01T09:30-05:00' +%s) \
-  end_ts=$(date +%s) \
-  "$JOURNAL" > /tmp/realized_positions.csv
+# 3. Choose the evaluation datetime (end of day)
+DATE_TS="2026-07-22T16:30:00-04:00"
+DATE_YMD="$(date -d "$DATE_TS" '+%Y-%m-%d')"
+START_TS="$(date -d '2026-01-01T09:30:00-05:00' '+%s')"
+END_TS="$(date -d "$DATE_TS" '+%s')"
 
-# 4. Compute unrealized P&L for a closing date using OHLCV files
-./bin/add-unrealized \
-  date=2026-07-13 \
-  ohlcv_dir="${OLCV_DIR}" \
-  /tmp/realized_positions.csv > /tmp/unrealized_positions.csv
+# 4. Compute realized P&L over the date range
+bin/compute-realized \
+  -v start_ts="$START_TS" \
+  -v end_ts="$END_TS" \
+  "$JOURNAL" > tmp_realized.csv
 
-# 5. Compute Account Balance
-./bin/get-balance \
-  ts=$(date +%s)
-  balance=10000 \
-  /tmp/unrealized_positions.csv
+# 5. Compute unrealized P&L at daily close
+bin/add-unrealized \
+  -v date="$DATE_YMD" \
+  -v ohlcv_dir="$OHLCV_DIR" \
+  tmp_realized.csv > tmp_unrealized.csv
+
+# 6. Compute per-position DD/RU and append state
+TZ=America/New_York \
+bin/add-ddru \
+  -v date="$DATE_YMD" \
+  -v meta_file="$META_FILE" \
+  -v ohlcv_dir="$OHLCV_DIR" \
+  -v update=1 \
+  tmp_unrealized.csv > tmp_positions.csv
+
+# 7. Compute account balance at ts
+bin/get-balance \
+  -v ts="$END_TS" \
+  -v balance=10000 \
+  tmp_unrealized.csv
 ```
 
 
-## Idempotency and behavior
+***
+
+## Idempotency and behavior notes
 
 - Journal rows are de-duplicated by `EXCHANGE_EXEC_ID` before append.
-- Newly entered metadata rows are allowed with same `<INSTRUMENT>:<TIMESTAMP>` key.
-- `enter-trade` keeps the journal sorted by timestamp after each insert.
-- Unrealized P&L is only computed when the consolidated position quantity is non-zero and a positive closing price is found for the requested date.
-
-
-## Assumptions and caveats
-
-- `bin/compute-realized` expects a headered journal CSV and processes rows by symbol over a timestamp interval.
-- `bin/add-unrealized` expects one OHLCV file per symbol per year and does a direct date match on the first field.
-- If an OHLCV file is missing or the date is absent, the script will not be able to produce a valid closing-price-based unrealized P&L for that symbol. It will have a '0' value instead.
+- `enter-trade` keeps the journal sorted by `TIMESTAMP` after each insert.
+- `add-unrealized` only computes unrealized P\&L when `QUANTITY != 0` and a valid `Close` price exists; otherwise, `UNRPL` is `0`.
+- `add-ddru` only treats daily DD/RU changes as “++” relative to prior state when the position stays on the same side; flips through zero are treated as new regimes for DD/RU.
+- `get-balance` is a pure reducer: given a starting `balance` and a stream of positions with realized/unrealized P\&L, it outputs a single `date,balance` tuple.
 
