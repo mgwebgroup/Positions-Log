@@ -5,7 +5,7 @@
 # Reads consolidated positions from stdin or a CSV file with header, uses:
 #   1) meta.csv records keyed as TICKER:<TIMESTAMP> and TICKER:META
 #   2) OHLCV files keyed by YYYY-MM-DD
-#   3) Consolidated positions file is produced by `bin/add_unrealized`
+#   3) Consolidated positions file produced by `bin/add_unrealized`
 #
 # It outputs the input rows plus:
 #   DD,RU,LOW,HIGH,DD++,RU++
@@ -41,7 +41,6 @@ BEGIN {
 
     if (date == "" && ("DATE" in ENVIRON))
         date = ENVIRON["DATE"]
-
     if (date == "") {
         print "ERROR: date=YYYY-MM-DD is required" > "/dev/stderr"
         exit 2

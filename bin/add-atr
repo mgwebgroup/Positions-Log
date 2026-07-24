@@ -1,0 +1,63 @@
+#! /usr/bin/gawk -f 
+#
+# Add Average True Range
+#
+# Reads consolidated positions from stdin or a CSV file with header, uses:
+#   1) ATR files keyed by YYYY-MM-DD
+#   2) ATR files named as TICKER_N_Daily_YYYY.csv
+#   3) Consolidated positions file produced by `bin/add_unrealized` 
+#
+# It adds ATR column to the input rows
+#  
+# Example:
+# ./add-atr \
+# -v date=YYYY-MM-DD \
+# -v atr_dir=Path/to/ATR/files/directory \
+# -v n=14 \
+# consolidated_positions.csv
+
+
+BEGIN {
+	FS=","
+	OFS=","
+	atr_period = n
+
+    if (date == "" && ("DATE" in ENVIRON))
+        date = ENVIRON["DATE"]
+    if (date == "") {
+        print "ERROR: date=YYYY-MM-DD is required" > "/dev/stderr"
+        exit 2
+    }
+
+	if (n == "") {
+        print "ERROR: n=atr_period is required" > "/dev/stderr"
+        exit 2
+	}
+
+    if (atr_dir == "")
+        atr_dir = "Data/ATR"
+
+    split(date, date_parts, "-")
+    year = date_parts[1]
+}
+
+NR == 1 {
+	printf "%s,ATR(%i)\n", $0, atr_period
+	split(date, parts, "-")
+}
+
+NR > 1 {
+	record = $0
+	i = $2
+	atr_value = 0
+
+	file_name = atr_dir "/" i "_" atr_period "_Daily_" parts[1] ".csv"
+	while ((getline < (file_name)) > 0) {
+		if (date == $1)
+			atr_value = $2
+	}
+	close(file_name)
+
+	print record, atr_value
+}
+

@@ -31,8 +31,13 @@ BEGIN {
 	FS=","
 	OFS=","
 
-	if ("DATE" in ENVIRON)
-		date = ENVIRON["DATE"]
+    if (date == "" && ("DATE" in ENVIRON))
+        date = ENVIRON["DATE"]
+    if (date == "") {
+        print "ERROR: date=YYYY-MM-DD is required" > "/dev/stderr"
+        exit 2
+    }
+
 	if ("OHLCV_DIR" in ENVIRON)
 		ohlcv_dir = ENVIRON["OHLCV_DIR"]
 }

@@ -4,7 +4,8 @@ A small shell and AWK toolkit for:
 
 - Recording trade executions into a CSV journal
 - Attaching lightweight per-position metadata (stop loss, price target, intraday high/low)
-- Computing realized and unrealized P\&L
+- Computing realized and unrealized P&L
+- Appending Average True Range (ATR) values to consolidated positions
 - Computing per-position drawdowns and runups (DD/RU)
 - Computing account equity over time
 
@@ -21,6 +22,7 @@ bin/
   enter-meta        # metadata entry for a just-entered trade
   compute-realized  # realized P&L and per-symbol position consolidation
   add-unrealized    # append unrealized P&L from OHLCV close prices
+  add-atr           # append ATR(n) from per-symbol ATR files
   add-ddru          # append DD/RU, intraday low/high, flags
   get-balance       # compute account balance from realized+unrealized P&L
 
@@ -40,11 +42,13 @@ The `bin/` scripts expect `env.sh` to set the relevant file paths and default va
 
 ## Data files
 
-The toolkit uses three main data files:
+The toolkit uses four main data sources:
 
 1. **Journal CSV** — trade executions (one row per execution)
 2. **Metadata CSV** — per-trade intraday info and per-symbol DD/RU state
-3. **OHLCV files** — per-ticker daily bar data used for unrealized P\&L and DD/RU
+3. **OHLCV files** — per-ticker daily bar data used for unrealized P&L and DD/RU
+4. **ATR files** — per-ticker daily ATR data used by `bin/add-atr`
+
 
 ### Journal file
 
@@ -143,6 +147,41 @@ Constraints:
 - `High` and `Low` are the 3rd and 4th fields and are used for DD/RU updates.
 
 
+### ATR files
+
+ATR files are per-symbol, per-period, per-year CSVs with the name:
+
+```text
+TICKER_N_Daily_YYYY.csv
+```
+
+Example filenames:
+
+```text
+AAPL_14_Daily_2026.csv
+NVDA_20_Daily_2026.csv
+```
+
+Format:
+
+```csv
+YYYY-MM-DD,ATR
+```
+
+Example:
+
+```csv
+2026-07-22,5.84
+2026-07-23,6.11
+```
+
+Constraints:
+
+- The first field must be the trading date in `YYYY-MM-DD` format.
+- The second field must be the ATR value for that date.
+- `bin/add-atr` selects files by symbol, ATR period `n`, and year derived from `date`.
+
+
 ## Configuration
 
 Copy `env.sh.example` to `env.sh` and edit it (or edit `env.sh` directly) to define the paths and defaults used by the entry and analytics workflow.
@@ -158,6 +197,9 @@ META_FILE="/absolute/path/to/Data/Positions/meta.csv"
 
 # Directory containing OHLCV files like TICKER_Daily_YYYY.csv
 OHLCV_DIR="/absolute/path/to/OHLCV"
+
+# Directory containing ATR files like TICKER_N_Daily_YYYY.csv
+ATR_DIR="/absolute/path/to/ATR"
 
 # Default timezone offset for entry timestamps (used by entry.sh)
 TIMEZONE="-0400"
@@ -191,6 +233,7 @@ The main user-facing commands are:
 - `bin/add-unrealized` – append unrealized P\&L using OHLCV close prices.
 - `bin/add-ddru` – append drawdown/runup, daily lows/highs, and change flags.
 - `bin/get-balance` – compute account equity given realized + unrealized P\&L.
+- `bin/add-atr` – append ATR(n) using per-symbol ATR files.
 
 Each command is designed to be used either by itself or as a step in an end-to-end daily pipeline.
 
@@ -346,6 +389,57 @@ UNRPL = (Close - AVGBASEPRICE) * QUANTITY
 
 If either the OHLCV file or the date row is missing, the unrealized P\&L for that symbol is `0`.
 
+
+***
+
+## Average True Range – `bin/add-atr`
+
+`bin/add-atr` takes the output of `bin/add-unrealized` (or any compatible consolidated positions CSV with a header), looks up ATR values from per-symbol ATR files, and appends an `ATR(n)` column.
+
+Usage:
+
+```bash
+bin/add-atr \
+  -v date=YYYY-MM-DD \
+  -v atr_dir="$ATR_DIR" \
+  -v n=14 \
+  tmp_unrealized_positions.csv > tmp_unrealized_with_atr.csv
+```
+
+Where:
+
+- `date` is the trading date in `YYYY-MM-DD` format.
+- `atr_dir` is the directory containing ATR files.
+- `n` is the ATR period, for example `14` or `20`.
+
+Requirements:
+
+- ATR filename: `TICKER_N_Daily_YYYY.csv`.
+- ATR file format: `YYYY-MM-DD,ATR`.
+- The script uses the first field as date and the second field as the ATR value.
+
+Behavior:
+
+- The script reads the input header and appends a new column named `ATR(n)`.
+- For each input row, it uses the symbol in the `INSTRUMENT` column and constructs a file path of the form:
+
+```text
+${ATR_DIR}/TICKER_N_Daily_YYYY.csv
+```
+
+- It then scans the ATR file for the requested `date` and appends the corresponding ATR value.
+- If no matching file or date is found, the appended ATR value remains `0`.
+
+Example:
+
+```bash
+bin/add-unrealized \
+  -v date="$DATE_YMD" \
+  -v ohlcv_dir="$OHLCV_DIR" \
+  tmp_realized.csv \
+| bin/add-atr -v date="$DATE_YMD" -v atr_dir="$ATR_DIR" -v n=14 \
+> tmp_unrealized_atr.csv
+```
 ***
 
 
@@ -476,13 +570,19 @@ bin/add-ddru \
   -v update=1 \
   tmp_unrealized.csv > tmp_positions.csv
 
-# 7. Compute account balance at ts
+# 7. Append ATR(14)
+bin/add-atr \
+  -v date="$DATE_YMD" \
+  -v atr_dir="$ATR_DIR" \
+  -v n=14 \
+  tmp_unrealized.csv > tmp_unrealized_atr.csv
+
+# 8. Compute account balance at ts
 bin/get-balance \
   -v ts="$END_TS" \
   -v balance=10000 \
   tmp_unrealized.csv
 ```
-
 
 ***
 
@@ -493,4 +593,5 @@ bin/get-balance \
 - `add-unrealized` only computes unrealized P\&L when `QUANTITY != 0` and a valid `Close` price exists; otherwise, `UNRPL` is `0`.
 - `add-ddru` only treats daily DD/RU changes as “++” relative to prior state when the position stays on the same side; flips through zero are treated as new regimes for DD/RU.
 - `get-balance` is a pure reducer: given a starting `balance` and a stream of positions with realized/unrealized P\&L, it outputs a single `date,balance` tuple.
+- `add-atr` requires both `date` and `n`; it appends a column named `ATR(n)` and emits `0` when no ATR file entry matches the symbol/date combination.
 
