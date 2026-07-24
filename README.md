@@ -5,6 +5,7 @@ A small shell and AWK toolkit for:
 - Recording trade executions into a CSV journal
 - Attaching lightweight per-position metadata (stop loss, price target, intraday high/low)
 - Computing realized and unrealized P&L
+- Appending closing prices to consolidated positions
 - Appending Average True Range (ATR) values to consolidated positions
 - Computing per-position drawdowns and runups (DD/RU)
 - Computing account equity over time
@@ -22,6 +23,7 @@ bin/
   enter-meta        # metadata entry for a just-entered trade
   compute-realized  # realized P&L and per-symbol position consolidation
   add-unrealized    # append unrealized P&L from OHLCV close prices
+  add-price         # append daily closing price from OHLCV files
   add-atr           # append ATR(n) from per-symbol ATR files
   add-ddru          # append DD/RU, intraday low/high, flags
   get-balance       # compute account balance from realized+unrealized P&L
@@ -46,7 +48,7 @@ The toolkit uses four main data sources:
 
 1. **Journal CSV** — trade executions (one row per execution)
 2. **Metadata CSV** — per-trade intraday info and per-symbol DD/RU state
-3. **OHLCV files** — per-ticker daily bar data used for unrealized P&L and DD/RU
+3. **OHLCV files** — per-ticker daily bar data used for unrealized P&L, closing-price enrichment, and DD/RU
 4. **ATR files** — per-ticker daily ATR data used by `bin/add-atr`
 
 
@@ -143,7 +145,7 @@ Date,Open,High,Low,Close,Volume
 Constraints:
 
 - `Date` is in `YYYY-MM-DD` format.
-- `Close` is the 5th field and is used for unrealized P\&L.
+- `Close` is the 5th field and is used for unrealized P&L and by `bin/add-price`.
 - `High` and `Low` are the 3rd and 4th fields and are used for DD/RU updates.
 
 
@@ -234,6 +236,7 @@ The main user-facing commands are:
 - `bin/add-ddru` – append drawdown/runup, daily lows/highs, and change flags.
 - `bin/get-balance` – compute account equity given realized + unrealized P\&L.
 - `bin/add-atr` – append ATR(n) using per-symbol ATR files.
+- `bin/add-price` – append daily closing price using OHLCV files.
 
 Each command is designed to be used either by itself or as a step in an end-to-end daily pipeline.
 
@@ -392,9 +395,59 @@ If either the OHLCV file or the date row is missing, the unrealized P\&L for tha
 
 ***
 
+## Closing price – `bin/add-price`
+
+`bin/add-price` takes the output of `compute-realized`, `add-unrealized`, or any compatible consolidated positions CSV with a header, looks up the daily closing price for each symbol from OHLCV files, and appends a `Price` column.
+
+Usage:
+
+```bash
+bin/add-price \
+  -v date=YYYY-MM-DD \
+  -v ohlcv_dir="$OHLCV_DIR" \
+  tmp_unrealized_positions.csv > tmp_unrealized_with_price.csv
+```
+
+Where:
+
+- `date` is the trading date in `YYYY-MM-DD` format.
+- `ohlcv_dir` is the directory containing `TICKER_Daily_YYYY.csv`.
+
+Requirements:
+
+- OHLCV filename: `TICKER_Daily_YYYY.csv`.
+- OHLCV format: `Date,Open,High,Low,Close,Volume`.
+- The script uses the first field as date and the fifth field as the closing price.
+
+Behavior:
+
+- The script reads the input header and appends a new column named `Price`.
+- For each input row, it uses the symbol in the `INSTRUMENT` column and constructs a file path of the form:
+
+```text
+${OHLCV_DIR}/TICKER_Daily_YYYY.csv
+```
+
+- It scans the OHLCV file for the requested `date` and appends the corresponding `Close` value.
+- The current implementation only performs the lookup when `QUANTITY > 0`; for short or flat rows, the appended `Price` value remains `0`.
+- If no matching file or date is found, the appended `Price` value remains `0`.
+
+Example:
+
+```bash
+bin/add-unrealized \
+  -v date="$DATE_YMD" \
+  -v ohlcv_dir="$OHLCV_DIR" \
+  tmp_realized.csv \
+| bin/add-price -v date="$DATE_YMD" -v ohlcv_dir="$OHLCV_DIR" \
+> tmp_unrealized_price.csv
+```
+
+***
+
 ## Average True Range – `bin/add-atr`
 
-`bin/add-atr` takes the output of `bin/add-unrealized` (or any compatible consolidated positions CSV with a header), looks up ATR values from per-symbol ATR files, and appends an `ATR(n)` column.
+`bin/add-atr` takes the output of `bin/add-unrealized`, `bin/add-price`, or any compatible consolidated positions CSV with a header, looks up ATR values from per-symbol ATR files, and appends an `ATR(n)` column.
 
 Usage:
 
@@ -561,27 +614,33 @@ bin/add-unrealized \
   -v ohlcv_dir="$OHLCV_DIR" \
   tmp_realized.csv > tmp_unrealized.csv
 
-# 6. Compute per-position DD/RU and append state
-TZ=America/New_York \
-bin/add-ddru \
+# 6. Append closing price
+bin/add-price \
   -v date="$DATE_YMD" \
-  -v meta_file="$META_FILE" \
   -v ohlcv_dir="$OHLCV_DIR" \
-  -v update=1 \
-  tmp_unrealized.csv > tmp_positions.csv
+  tmp_unrealized.csv > tmp_unrealized_price.csv
 
 # 7. Append ATR(14)
 bin/add-atr \
   -v date="$DATE_YMD" \
   -v atr_dir="$ATR_DIR" \
   -v n=14 \
-  tmp_unrealized.csv > tmp_unrealized_atr.csv
+  tmp_unrealized_price.csv > tmp_unrealized_price_atr.csv
 
-# 8. Compute account balance at ts
+# 8. Compute per-position DD/RU and append state
+TZ=America/New_York \
+bin/add-ddru \
+  -v date="$DATE_YMD" \
+  -v meta_file="$META_FILE" \
+  -v ohlcv_dir="$OHLCV_DIR" \
+  -v update=1 \
+  tmp_unrealized_price_atr.csv > tmp_positions.csv
+
+# 9. Compute account balance at ts
 bin/get-balance \
   -v ts="$END_TS" \
   -v balance=10000 \
-  tmp_unrealized.csv
+  tmp_unrealized_price_atr.csv
 ```
 
 ***
@@ -594,4 +653,4 @@ bin/get-balance \
 - `add-ddru` only treats daily DD/RU changes as “++” relative to prior state when the position stays on the same side; flips through zero are treated as new regimes for DD/RU.
 - `get-balance` is a pure reducer: given a starting `balance` and a stream of positions with realized/unrealized P\&L, it outputs a single `date,balance` tuple.
 - `add-atr` requires both `date` and `n`; it appends a column named `ATR(n)` and emits `0` when no ATR file entry matches the symbol/date combination.
-
+- `add-price` requires `date`; it appends a `Price` column from the OHLCV `Close` field and currently only performs the lookup when `QUANTITY != 0`, otherwise emitting `0`.

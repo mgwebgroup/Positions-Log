@@ -1,0 +1,58 @@
+#! /usr/bin/gawk -f 
+#
+# Add Closing Price
+#
+# Reads consolidated positions from stdin or a CSV file with header, uses:
+#   1) OHLCV files keyed by YYYY-MM-DD
+#   2) Consolidated positions file produced by `bin/add_unrealized` 
+#
+# It adds Price column to the input rows
+#  
+# Example:
+# ./add-price \
+# -v date=YYYY-MM-DD \
+# -v ohlcv_dir=Data/OHLCV \
+# consolidated_positions.csv
+
+
+BEGIN {
+	FS=","
+	OFS=","
+
+    if (date == "" && ("DATE" in ENVIRON))
+        date = ENVIRON["DATE"]
+    if (date == "") {
+        print "ERROR: date=YYYY-MM-DD is required" > "/dev/stderr"
+        exit 2
+    }
+
+    if (ohlcv_dir == "")
+        ohlcv_dir = "Data/OHLCV"
+
+    split(date, date_parts, "-")
+    year = date_parts[1]
+}
+
+NR == 1 {
+	print $0, "Price"
+	split(date, date_parts, "-")
+}
+
+NR > 1 {
+	record = $0
+	i = $2
+	q = $3
+	price = 0
+
+	if (q != 0 ) {
+		file_name = ohlcv_dir "/" i "_Daily_" year ".csv"
+		while ((getline < (file_name)) > 0) {
+			if (date == $1)
+				price = $5
+		}
+		close(file_name)
+	}
+
+	print record, price 
+}
+
