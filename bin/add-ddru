@@ -3,7 +3,7 @@
 # End-of-day DD/RU updater.
 #
 # Reads consolidated positions from stdin or a CSV file with header, uses:
-#   1) meta.csv records keyed as TICKER:<TIMESTAMP> and TICKER:META
+#   1) meta.csv records keyed as TICKER:<TIMESTAMP> and TICKER:DDRU
 #   2) OHLCV files keyed by YYYY-MM-DD
 #   3) Consolidated positions file produced by `bin/add_unrealized`
 #
@@ -12,17 +12,17 @@
 #
 # Meta row formats:
 #   TICKER:TIMESTAMP,SL:...,HIGH:...,LOW:...,PT:...,Q:...
-#   TICKER:META,DD:...,RU:...,Q:...
+#   TICKER:DDRU,DD:...,RU:...,Q:...
 #
 # Rules:
 # - Same-day add/open fills contribute to intraday consolidation.
 # - Same-day reducing fills do NOT contribute to intraday DD/RU consolidation.
-# - Same-day reducing fills DO adjust remaining quantity in TICKER:META.
+# - Same-day reducing fills DO adjust remaining quantity in TICKER:DDRU.
 # - date=YYYY-MM-DD is mandatory and used to read OHLCV rows.
 # - ohlcv_dir points to directory holding TICKER_Daily_YYYY.csv files.
 # - TZ environment should be set to the desired trading-session timezone.
 # - update=1 modifies meta file to consolidate all TICKER:TIMESTAMP rows and 
-#   then compute DD, RU and Q fields for the TICKER:META record.
+#   then compute DD, RU and Q fields for the TICKER:DDRU record.
 #
 # Example:
 #   TZ=America/New_York ./add_ddru.awk \
@@ -90,7 +90,7 @@ function load_meta(file,    line, f, n, idx, ticker, suffix, ts, q, high, low, d
         ticker = parts[1]
         suffix = parts[2]
 
-        if (suffix == "META") {
+        if (suffix == "DDRU") {
             meta_seen[ticker] = 1
             meta_dd[ticker] = get_tag(line, "DD") + 0
             meta_ru[ticker] = get_tag(line, "RU") + 0
@@ -251,7 +251,7 @@ function merge_state(ticker, pos_q,    side, old_dd, old_ru, new_dd, new_ru, day
 }
 
 function persist_meta(ticker, pos_q,    idx, kv, i) {
-    idx = ticker ":META"
+    idx = ticker ":DDRU"
     delete kv
 
     for (i = 1; i <= fill_count[ticker]; i++) {
